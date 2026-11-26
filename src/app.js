@@ -1,59 +1,109 @@
-// Aplicación web mínima: lista de tareas en memoria + endpoints de salud y métricas.
+// Aplicación Express: API de tareas con SQLite + endpoints de salud y métricas.
+// createApp recibe sus dependencias (inyección) para poder probarla con una base en memoria.
 const express = require('express');
 const path = require('path');
-const { normalizarTitulo } = require('./validacion');
+const { abrirBaseDeDatos } = require('./db');
+const { crearRepositorioTareas } = require('./repositories/tareasRepository');
+const { validarTitulo, parsearId } = require('./services/validacion');
+const { crearMetricas } = require('./metrics');
+const { crearLogger } = require('./logger');
 
-function createApp() {
+function createApp({
+  db = abrirBaseDeDatos(':memory:'),
+  logger = crearLogger({ silencioso: process.env.NODE_ENV === 'test' }),
+  metricas = crearMetricas(),
+  version = 'dev',
+  habilitarSimulacionErrores = false,
+} = {}) {
   const app = express();
-  app.use(express.json());
-  app.use(express.static(path.join(__dirname, '..', 'public')));
+  const tareas = crearRepositorioTareas(db);
 
-  const tareas = [];
-  const metricas = { solicitudes: 0, errores: 0, inicio: Date.now() };
-  let siguienteId = 1;
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '10kb' }));
 
-  // Registro (log) simple de cada solicitud: base para el monitoreo.
+  // Middleware de observabilidad: mide cada solicitud, la cuenta y la registra en el log.
   app.use((req, res, next) => {
-    metricas.solicitudes++;
-    const t0 = Date.now();
+    const inicio = process.hrtime.bigint();
     res.on('finish', () => {
-      if (res.statusCode >= 500) metricas.errores++;
-      if (process.env.NODE_ENV !== 'test') console.log(JSON.stringify({ nivel: 'info', metodo: req.method, ruta: req.path, estado: res.statusCode, ms: Date.now() - t0 }));
+      const segundos = Number(process.hrtime.bigint() - inicio) / 1e9;
+      // Se usa la ruta "plantilla" (/api/tareas/:id) para no crear una serie por cada id.
+      let ruta = 'estaticos';
+      if (req.route) ruta = req.baseUrl + req.route.path;
+      else if (res.statusCode === 404) ruta = 'no_encontrada';
+      metricas.registrarSolicitud({ metodo: req.method, ruta, estado: res.statusCode, segundos });
+
+      const nivel = res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info';
+      logger[nivel]('solicitud', {
+        metodo: req.method,
+        ruta: req.originalUrl,
+        estado: res.statusCode,
+        ms: Math.round(segundos * 1000),
+      });
     });
     next();
   });
 
-  app.get('/health', (req, res) => res.json({ estado: 'ok' }));
+  app.use(express.static(path.join(__dirname, '..', 'public')));
 
-  app.get('/metrics', (req, res) => res.json({
-    solicitudes: metricas.solicitudes,
-    errores: metricas.errores,
-    tareas: tareas.length,
-    segundosActivo: Math.round((Date.now() - metricas.inicio) / 1000)
-  }));
+  app.get('/health', (req, res) => {
+    const baseDeDatos = tareas.estaDisponible() ? 'ok' : 'error';
+    const estado = baseDeDatos === 'ok' ? 'ok' : 'degradado';
+    res.status(estado === 'ok' ? 200 : 503).json({ estado, version, baseDeDatos });
+  });
 
-  app.get('/api/tareas', (req, res) => res.json(tareas));
+  app.get('/metrics', (req, res) => {
+    res.type('text/plain; version=0.0.4');
+    res.send(metricas.exportar({ version, tareas: tareas.contar() }));
+  });
+
+  app.get('/api/tareas', (req, res) => res.json(tareas.listar()));
+
+  app.get('/api/tareas/:id', (req, res) => {
+    const id = parsearId(req.params.id);
+    const tarea = id && tareas.obtener(id);
+    if (!tarea) return res.status(404).json({ error: 'Tarea no encontrada' });
+    res.json(tarea);
+  });
 
   app.post('/api/tareas', (req, res) => {
-    const titulo = normalizarTitulo(req.body && req.body.titulo);
-    if (!titulo) return res.status(400).json({ error: 'El título es obligatorio' });
-    const tarea = { id: siguienteId++, titulo, completada: false };
-    tareas.push(tarea);
+    const resultado = validarTitulo(req.body && req.body.titulo);
+    if (!resultado.valido) return res.status(400).json({ error: resultado.error });
+    const tarea = tareas.crear(resultado.titulo);
+    logger.info('tarea_creada', { id: tarea.id });
     res.status(201).json(tarea);
   });
 
   app.patch('/api/tareas/:id', (req, res) => {
-    const tarea = tareas.find(t => t.id === Number(req.params.id));
+    const id = parsearId(req.params.id);
+    const tarea = id && tareas.alternar(id);
     if (!tarea) return res.status(404).json({ error: 'Tarea no encontrada' });
-    tarea.completada = !tarea.completada;
     res.json(tarea);
   });
 
   app.delete('/api/tareas/:id', (req, res) => {
-    const indice = tareas.findIndex(t => t.id === Number(req.params.id));
-    if (indice === -1) return res.status(404).json({ error: 'Tarea no encontrada' });
-    tareas.splice(indice, 1);
+    const id = parsearId(req.params.id);
+    if (!id || !tareas.eliminar(id)) return res.status(404).json({ error: 'Tarea no encontrada' });
+    logger.info('tarea_eliminada', { id });
     res.status(204).end();
+  });
+
+  if (habilitarSimulacionErrores) {
+    // Genera un error 500 a propósito para demostrar las alertas en la presentación.
+    app.get('/api/simular-error', () => {
+      throw new Error('Error simulado para probar el monitoreo');
+    });
+  }
+
+  app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
+
+  // Manejador central de errores: nunca expone detalles internos al cliente.
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    if (err.type === 'entity.parse.failed') {
+      return res.status(400).json({ error: 'El cuerpo de la solicitud no es JSON válido' });
+    }
+    logger.error('error_no_controlado', { mensajeError: err.message, ruta: req.originalUrl });
+    res.status(500).json({ error: 'Error interno del servidor' });
   });
 
   return app;

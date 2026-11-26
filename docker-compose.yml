@@ -1,0 +1,101 @@
+# Entorno completo: aplicación + monitoreo (métricas, logs centralizados y alertas).
+#   docker compose up -d --build      -> levanta todo
+#   docker compose up -d --build app  -> solo la aplicación
+name: tareas-devops
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        APP_VERSION: local
+    image: tareas-devops:local
+    container_name: tareas-app
+    ports:
+      - "3000:3000"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ENABLE_ERROR_SIMULATION: ${ENABLE_ERROR_SIMULATION:-true}
+    volumes:
+      - app-data:/app/data
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.4.0
+    container_name: tareas-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app
+      - alertmanager
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: tareas-alertmanager
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.5.0
+    container_name: tareas-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.10.0
+    container_name: tareas-alloy
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "12345:12345"
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.0.0
+    container_name: tareas-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/tareas.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+volumes:
+  app-data:
+  prometheus-data:
+  loki-data:
+  grafana-data:

@@ -1,3 +1,14 @@
 node_modules
 coverage
+data
 .git
+.github
+docs
+tests
+monitoring
+scripts
+*.md
+.env
+.env.*
+docker-compose*.yml
+eslint.config.js

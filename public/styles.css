@@ -1,0 +1,86 @@
+:root {
+  --azul: #1f3b63;
+  --azul-claro: #e8eef7;
+  --verde: #1e7d4f;
+  --rojo: #b3261e;
+  --gris: #6b7280;
+  --borde: #d6dbe3;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: #f5f7fa;
+  color: #1f2937;
+}
+
+.contenedor {
+  max-width: 640px;
+  margin: 40px auto;
+  padding: 24px;
+  background: #fff;
+  border: 1px solid var(--borde);
+  border-radius: 12px;
+}
+
+h1 { margin: 0; color: var(--azul); }
+.subtitulo { margin: 4px 0 24px; color: var(--gris); font-size: 0.9rem; }
+
+.formulario { display: flex; gap: 8px; }
+.formulario input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  font-size: 1rem;
+}
+.formulario input:focus { outline: 2px solid var(--azul); outline-offset: 1px; }
+
+button {
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--azul);
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+}
+button:hover { opacity: 0.9; }
+
+.mensaje { color: var(--rojo); margin: 8px 0 0; }
+.resumen { color: var(--gris); font-size: 0.9rem; margin: 20px 0 8px; }
+
+.lista { list-style: none; padding: 0; margin: 0; }
+.lista li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--borde);
+}
+.lista li label { flex: 1; cursor: pointer; }
+.lista li.hecha label { text-decoration: line-through; color: var(--gris); }
+.lista input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--verde); }
+
+.boton-eliminar {
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--rojo);
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+}
+.boton-eliminar:hover { border-color: var(--rojo); }
+
+.vacio { color: var(--gris); text-align: center; padding: 16px 0; }
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 24px;
+  font-size: 0.8rem;
+  color: var(--gris);
+}
+.estado.ok::before { content: "● "; color: var(--verde); }
+.estado.error::before { content: "● "; color: var(--rojo); }

@@ -1,51 +1,139 @@
-# Pipeline CI/CD: se ejecuta en cada push y pull request.
+# Pipeline CI/CD
+#   PR a main   -> calidad (lint + pruebas) y contenedor (build + prueba de humo)
+#   push a main -> lo anterior + publicar imagen en GHCR + desplegar a Render + prueba de humo en producción
 name: CI/CD
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
+
+# Si llegan dos pushes seguidos a la misma rama, se cancela la ejecución vieja.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  NODE_VERSION: "22"
+  IMAGE_LOCAL: tareas-devops
+
 jobs:
-  build-test:
-    name: Build y pruebas
+  calidad:
+    name: 1. Calidad (lint + pruebas)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - name: Revisión estática
-        run: npm run lint
-      - name: Pruebas con cobertura
-        run: npm test
-      - name: Construir imagen Docker
-        run: docker build -t node-cicd-pipeline:${{ github.sha }} .
+      - name: Descargar código
+        uses: actions/checkout@v5
 
-  deploy-pages:
-    name: Despliegue a GitHub Pages
-    needs: build-test
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      - name: Configurar Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Instalar dependencias
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Análisis estático (ESLint)
+        run: npm run lint
+
+      - name: Pruebas unitarias
+        run: npm run test:unit -- --ci
+
+      - name: Pruebas de integración
+        run: npm run test:integration -- --ci
+
+      - name: Cobertura (falla si baja del umbral)
+        run: npm run test:ci
+
+      - name: Resumen de cobertura
+        if: always()
+        run: |
+          if [ -f coverage/coverage-summary.json ]; then
+            node -e '
+              const t = require("./coverage/coverage-summary.json").total;
+              const filas = ["lines", "statements", "functions", "branches"]
+                .map(k => `| ${k} | ${t[k].pct}% |`).join("\n");
+              console.log(`### Cobertura de pruebas\n| Métrica | % |\n|---|---|\n${filas}`);
+            ' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  contenedor:
+    name: 2. Imagen Docker + prueba de humo
+    needs: calidad
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      packages: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Descargar código
+        uses: actions/checkout@v5
+
+      - name: Construir imagen
+        run: |
+          docker build \
+            --build-arg APP_VERSION=${{ github.sha }} \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
+            --label org.opencontainers.image.revision=${{ github.sha }} \
+            -t $IMAGE_LOCAL:${{ github.sha }} .
+
+      - name: Levantar el contenedor
+        run: docker run -d --name app-ci -p 3000:3000 $IMAGE_LOCAL:${{ github.sha }}
+
+      - name: Prueba de humo contra el contenedor
+        run: bash scripts/smoke-test.sh http://localhost:3000 ${{ github.sha }} 60
+
+      - name: Logs del contenedor
+        if: always()
+        run: docker logs app-ci || true
+
+      - name: Publicar imagen en GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          IMAGEN="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag $IMAGE_LOCAL:${{ github.sha }} "$IMAGEN:${{ github.sha }}"
+          docker tag $IMAGE_LOCAL:${{ github.sha }} "$IMAGEN:latest"
+          docker push "$IMAGEN:${{ github.sha }}"
+          docker push "$IMAGEN:latest"
+          echo "### Imagen publicada" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$IMAGEN:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  despliegue:
+    name: 3. Despliegue a producción (Render)
+    needs: contenedor
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: produccion
+    env:
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+      RENDER_APP_URL: ${{ vars.RENDER_APP_URL }}
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v5
+
+      - name: Verificar configuración de Render
+        id: config
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ] || [ -z "$RENDER_APP_URL" ]; then
+            echo "::warning::Falta el secreto RENDER_DEPLOY_HOOK_URL o la variable RENDER_APP_URL. Se omite el despliegue (ver docs/PIPELINE.md)."
+            echo "listo=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "listo=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Disparar despliegue
+        if: steps.config.outputs.listo == 'true'
+        run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL" -o /dev/null && echo "Despliegue solicitado a Render."
+
+      - name: Prueba de humo en producción (espera la versión nueva)
+        if: steps.config.outputs.listo == 'true'
+        run: bash scripts/smoke-test.sh "$RENDER_APP_URL" "${{ github.sha }}" 900
+
+      - name: Resumen
+        if: steps.config.outputs.listo == 'true'
+        run: echo "### Desplegado en producción → $RENDER_APP_URL (versión \`${{ github.sha }}\`)" >> "$GITHUB_STEP_SUMMARY"

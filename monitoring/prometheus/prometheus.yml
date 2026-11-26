@@ -1,0 +1,25 @@
+# Prometheus lee (scrape) las métricas de la app cada 10 segundos y evalúa las reglas de alerta.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - /etc/prometheus/alertas.yml
+
+scrape_configs:
+  - job_name: tareas-app
+    scrape_interval: 10s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["app:3000"]
+        labels:
+          servicio: tareas
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

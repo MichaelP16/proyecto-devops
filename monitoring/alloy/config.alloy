@@ -1,0 +1,49 @@
+// Grafana Alloy: recolecta los logs (stdout) de los contenedores Docker y los envía a Loki.
+// (Reemplaza a Promtail, que llegó a fin de vida en marzo de 2026.)
+
+discovery.docker "contenedores" {
+  host = "unix:///var/run/docker.sock"
+}
+
+// Convierte metadatos de Docker en etiquetas útiles para buscar en Grafana.
+discovery.relabel "contenedores" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "contenedores" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.contenedores.targets
+  labels        = { origen = "docker" }
+  relabel_rules = discovery.relabel.contenedores.rules
+  forward_to    = [loki.process.json.receiver]
+}
+
+// Los logs de la app son JSON: se extrae el campo "level" como etiqueta para filtrar por nivel.
+loki.process "json" {
+  stage.json {
+    expressions = { level = "level" }
+  }
+
+  stage.labels {
+    values = { level = "" }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

@@ -1,116 +1,113 @@
-# Node CI/CD Pipeline
+# Proyecto Final DevOps — Lista de Tareas
 
-Aplicación web sencilla de tareas para practicar integración continua y despliegue continuo con Node.js, GitHub Actions y GitHub Pages.
+![CI/CD](https://github.com/MichaelP16/node-cicd-pipeline/actions/workflows/ci.yml/badge.svg)
 
-**Repositorio:** [MichaelP16/node-cicd-pipeline](https://github.com/MichaelP16/node-cicd-pipeline)  
-**URL de Pages:** [michaelp16.github.io/node-cicd-pipeline](https://michaelp16.github.io/node-cicd-pipeline/) (disponible después de publicar la rama `main` y configurar Pages).
+**Integrantes:** Nombre 1 · Nombre 2
+**Asignatura:** Electiva 1 — Introducción a DevOps (ITLA)
 
-## Requisitos
+Aplicación web de lista de tareas con un **pipeline DevOps completo**: control de versiones en GitHub, integración y despliegue continuo con GitHub Actions, contenedores Docker, pruebas automatizadas, análisis estático y monitoreo con métricas, logs centralizados y alertas.
 
-- Node.js 20 o superior y npm.
-- Git y una cuenta de GitHub.
-- Docker Desktop (opcional, para ejecutar la aplicación en contenedor).
+## Arquitectura
 
-## Ejecutar localmente
+```mermaid
+flowchart LR
+  dev[Desarrollador] -->|git push / PR| gh[GitHub]
+  gh --> ci[GitHub Actions]
+  subgraph Pipeline CI/CD
+    ci --> q[1. Lint + pruebas]
+    q --> c[2. Build Docker + prueba de humo]
+    c --> r[(GHCR<br/>registro de imágenes)]
+    c --> d[3. Deploy a Render + prueba de humo]
+  end
+  d --> prod[App en producción]
 
-```bash
-npm ci
-npm test
-npm run lint
-npm start
+  subgraph Monitoreo - docker compose
+    app[App Node.js<br/>/metrics + logs JSON] -->|scrape| prom[Prometheus]
+    prom -->|alertas| am[Alertmanager]
+    app -->|stdout| alloy[Grafana Alloy] --> loki[Loki]
+    prom --> graf[Grafana]
+    loki --> graf
+  end
 ```
 
-Abre <http://localhost:5501>. La aplicación local utiliza la API de Express. Si se sirve como sitio estático en GitHub Pages, las tareas se guardan en el almacenamiento local del navegador.
+| Componente | Tecnología |
+|---|---|
+| Frontend | HTML, CSS y JavaScript (`public/`) |
+| Backend | Node.js 22 + Express (`src/`) |
+| Base de datos | SQLite (módulo nativo `node:sqlite`) |
+| Pruebas | Jest + Supertest (unitarias e integración), cobertura mínima 80 % |
+| Análisis estático | ESLint |
+| Contenedores | Dockerfile multi-stage + Docker Compose |
+| CI/CD | GitHub Actions → GitHub Container Registry → Render |
+| Monitoreo | Prometheus, Alertmanager, Grafana, Loki y Grafana Alloy |
 
-### Probar con Go Live en VS Code
+## Inicio rápido
 
-Con la extensión **Live Server** instalada, abre esta carpeta como workspace y pulsa **Go Live**. La configuración de [`.vscode/settings.json`](.vscode/settings.json) sirve `public/` directamente en <http://localhost:5502>, sin interferir con el puerto 5500 ni con la API local de Node en 5501. En Go Live las tareas se guardan en el navegador; para usar la API, inicia `npm start` y abre <http://localhost:5501>.
+```bash
+# Con Docker (app + monitoreo completo)
+docker compose up -d --build
+```
 
-### API
+| Servicio | URL |
+|---|---|
+| Aplicación | http://localhost:3000 |
+| Grafana (admin / admin) | http://localhost:3001 |
+| Prometheus | http://localhost:9090 |
+| Alertmanager | http://localhost:9093 |
+
+Sin Docker:
+
+```bash
+npm install
+npm test        # pruebas + cobertura
+npm start       # http://localhost:3000
+```
+
+## API
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| `GET` | `/health` | Comprueba que el servicio está activo |
-| `GET` | `/metrics` | Muestra solicitudes, errores, tareas y tiempo activo |
-| `GET` | `/api/tareas` | Lista las tareas |
-| `POST` | `/api/tareas` | Crea una tarea; requiere `{ "titulo": "..." }` |
-| `PATCH` | `/api/tareas/:id` | Alterna el estado de una tarea |
-| `DELETE` | `/api/tareas/:id` | Elimina una tarea |
+| GET | `/api/tareas` | Lista todas las tareas |
+| GET | `/api/tareas/:id` | Obtiene una tarea |
+| POST | `/api/tareas` | Crea una tarea (`{ "titulo": "..." }`, máx. 120 caracteres) |
+| PATCH | `/api/tareas/:id` | Marca o desmarca la tarea como completada |
+| DELETE | `/api/tareas/:id` | Elimina una tarea |
+| GET | `/health` | Estado de la app, versión desplegada y base de datos |
+| GET | `/metrics` | Métricas en formato Prometheus |
 
-La API mantiene sus datos en memoria; se reinician al detener el servidor. La demo de Pages usa `localStorage` del navegador y no comparte datos entre dispositivos.
+## Estructura del proyecto
 
-### Pruebas y cobertura
-
-```bash
-npm test
+```
+├── src/
+│   ├── app.js                 # Rutas Express y middleware de observabilidad
+│   ├── server.js              # Arranque y apagado ordenado
+│   ├── config.js              # Configuración por variables de entorno
+│   ├── db.js                  # Conexión y esquema SQLite
+│   ├── logger.js              # Logs estructurados en JSON
+│   ├── metrics.js             # Métricas Prometheus
+│   ├── repositories/          # Acceso a datos (SQL)
+│   └── services/              # Reglas de negocio (validaciones)
+├── public/                    # Frontend
+├── tests/unit/                # Pruebas unitarias
+├── tests/integration/         # Pruebas de integración (API + SQLite)
+├── scripts/smoke-test.sh      # Prueba de humo post-despliegue
+├── monitoring/                # Prometheus, Alertmanager, Alloy y Grafana
+├── .github/workflows/ci.yml   # Pipeline CI/CD
+├── Dockerfile
+└── docker-compose.yml
 ```
 
-Jest genera la cobertura en `coverage/`. Las pruebas unitarias comprueban la normalización del título y las pruebas de integración ejercitan la API HTTP mediante Supertest.
+## Documentación
 
-### Docker
+- [Guía de instalación](docs/INSTALACION.md)
+- [Documentación del pipeline](docs/PIPELINE.md)
+- [Manual de operaciones](docs/OPERACIONES.md)
+- [Guía de presentación, lecciones aprendidas y desafíos](docs/PRESENTACION.md)
 
-```bash
-docker build -t node-cicd-pipeline .
-docker run --rm -p 5501:5501 node-cicd-pipeline
-```
+## Flujo de trabajo con Git
 
-La imagen usa Node.js Alpine, instala solo dependencias de producción y define una comprobación de salud en `/health`.
-
-## Pipeline de GitHub Actions
-
-El workflow está en [`.github/workflows/ci.yml`](.github/workflows/ci.yml) y se ejecuta en cada `push` a `main`, en los pull requests dirigidos a `main` y manualmente desde **Actions → CI/CD → Run workflow**.
-
-1. **Preparación:** descarga el código y configura Node.js 20 con caché de npm.
-2. **Instalación reproducible:** `npm ci` instala las versiones del `package-lock.json`.
-3. **Revisión estática:** `npm run lint` verifica la sintaxis de los módulos del servidor.
-4. **Pruebas y cobertura:** `npm test` ejecuta Jest y publica el resumen de cobertura en los logs.
-5. **Build:** construye la imagen Docker. El job falla si alguna etapa anterior falla.
-6. **Despliegue:** después de un `push` exitoso a `main`, carga `public/` como artefacto y lo publica en GitHub Pages. Los pull requests solo ejecutan CI, no publican.
-
-Los permisos de escritura para Pages están limitados al job de despliegue.
-
-## Configurar y publicar en GitHub
-
-El repositorio vinculado a este proyecto ya fue creado, pero debe tener estos archivos y el primer `push` para iniciar el workflow:
-
-1. Desde la carpeta del proyecto, instala dependencias para generar el lockfile si todavía no existe:
-
-   ```bash
-   npm install
-   ```
-
-2. Inicializa Git y publica la rama `main`:
-
-   ```bash
-   git init
-   git add .
-   git commit -m "Configurar aplicación y pipeline CI/CD"
-   git branch -M main
-   git remote add origin https://github.com/MichaelP16/node-cicd-pipeline.git
-   git push -u origin main
-   ```
-
-   Si ya existe un remoto llamado `origin`, usa `git remote set-url origin https://github.com/MichaelP16/node-cicd-pipeline.git` en vez de `git remote add`.
-
-3. En GitHub, abre **Settings → Pages** y selecciona **GitHub Actions** como fuente de despliegue.
-4. Abre **Actions** y comprueba que el workflow **CI/CD** finalice correctamente. El job **Despliegue a GitHub Pages** muestra la URL publicada.
-5. Para la demostración, enseña la ejecución verde en Actions y abre la URL de Pages. Si haces un cambio y lo subes a `main`, se ejecutará de nuevo.
-
-## Estructura
-
-```text
-.github/workflows/ci.yml   Automatización CI/CD
-public/index.html          Interfaz y modo estático para Pages
-src/app.js                 Aplicación Express y API
-src/server.js              Inicio del servidor
-src/validacion.js          Validación unitaria del título
-tests/                     Pruebas unitarias e integración
-Dockerfile                 Imagen de producción
-CONTRIBUTING.md            Guía para contribuir
-docs/INFORME_IMPLEMENTACION.md  Informe de implementación
-```
-
-## Documentación adicional
-
-- [Guía de contribución](CONTRIBUTING.md)
-- [Informe de implementación y demostración](docs/INFORME_IMPLEMENTACION.md)
+1. Crear una rama desde `main`: `git checkout -b feature/nombre`.
+2. Hacer commits pequeños con mensajes claros (`feat:`, `fix:`, `test:`, `docs:`, `ci:`).
+3. Abrir un Pull Request: el pipeline corre lint, pruebas y la prueba del contenedor.
+4. Hacer merge solo con el pipeline en verde (la rama `main` está protegida).
+5. El merge a `main` publica la imagen y despliega a producción automáticamente.

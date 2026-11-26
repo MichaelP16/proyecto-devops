@@ -1,0 +1,39 @@
+# Reglas de alerta. Se ven en http://localhost:9090/alerts y se envían a Alertmanager (http://localhost:9093).
+groups:
+  - name: tareas-app
+    rules:
+      - alert: AplicacionCaida
+        expr: up{job="tareas-app"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "La aplicación de tareas no responde"
+          description: "Prometheus no puede leer /metrics de {{ $labels.instance }} desde hace más de 30 segundos."
+
+      - alert: ErroresDelServidor
+        expr: sum(increase(http_requests_total{job="tareas-app", status=~"5.."}[2m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "La aplicación está devolviendo errores 5xx"
+          description: "Se registraron {{ $value | humanize }} errores 5xx en los últimos 2 minutos."
+
+      - alert: LatenciaAlta
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job="tareas-app"}[5m]))) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latencia p95 por encima de 500 ms"
+          description: "El 5% de las solicitudes más lentas tarda {{ $value | humanizeDuration }}."
+
+      - alert: MemoriaAlta
+        expr: process_resident_memory_bytes{job="tareas-app"} > 200000000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "La aplicación usa más de 200 MB de memoria"
+          description: "Memoria residente actual: {{ $value | humanize1024 }}B."
