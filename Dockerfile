@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---------- Etapa 1: dependencias de producción ----------
-FROM node:22-alpine AS dependencias
+FROM node:26-alpine AS dependencias
 WORKDIR /app
 COPY package*.json ./
 # npm ci usa package-lock.json para instalar versiones exactas (builds reproducibles).
@@ -9,7 +9,7 @@ RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit
     && npm cache clean --force
 
 # ---------- Etapa 2: imagen final ligera ----------
-FROM node:22-alpine AS produccion
+FROM node:26-alpine AS produccion
 
 # El pipeline pasa el SHA del commit para saber qué versión está corriendo (/health y /metrics).
 ARG APP_VERSION=""
